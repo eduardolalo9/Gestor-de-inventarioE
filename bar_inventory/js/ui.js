@@ -220,27 +220,13 @@ export function updateHeaderActions() {
     const cartCount  = state.cart.reduce((sum, item) => sum + (item.quantity || 0), 0);
     let html = '';
 
-    // ── "📥 Importar Excel" — tab inicio / productos, solo admin ──
-    // Activa el input oculto #fileInput que acepta .xlsx/.xls/.csv
-    // y llama a window.handleFileImport (definido en products.js).
-    if (isAdmin && (state.activeTab === 'inicio' || state.activeTab === 'productos')) {
-        html += `<button
-            onclick="document.getElementById('fileInput').click()"
-            class="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-white rounded-lg text-xs font-semibold shadow-sm"
-            style="background:rgba(255,255,255,0.09);border-color:rgba(255,255,255,0.18);"
-            title="Importar catálogo de productos desde Excel (.xlsx)">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-            </svg>
-            Excel
-        </button>`;
-    }
+    // ── Botón Excel en header eliminado —
+    // El único botón de Importar Excel está dentro de la pestaña Productos.
 
-    // ── 🛒 Carrito — tab pedidos, visible para ambos roles ────────
-    // El botón de carrito no requiere restricción de rol porque
-    // ver el resumen del pedido no modifica el catálogo de productos.
-    if (state.activeTab === 'pedidos' && cartCount > 0) {
+    // ── 🛒 Carrito — tab inicio + pedidos, visible para ambos roles ──────
+    // Visible en inicio para que el usuario pueda abrir el modal de pedido
+    // sin tener que cambiar de pestaña.
+    if ((state.activeTab === 'inicio' || state.activeTab === 'pedidos') && cartCount > 0) {
         html += `<button
             onclick="window.openOrderModal()"
             class="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-500 to-orange-500 text-white rounded-lg text-sm font-semibold shadow-sm"
