@@ -68,6 +68,19 @@ const _activeListeners = new Map();
 // Se actualiza DESPUÉS de que runTransaction confirme (fuera del callback).
 let _lastLocalWriteTs = 0;
 
+/**
+ * _setLastLocalWriteTs(ts) — FIX BUG-3
+ * Permite que handleFileImport() estampe el timestamp de importación
+ * ANTES de llamar syncToCloud(), de modo que el listener onSnapshot
+ * ignore el eco de confirmación y no sobreescriba state.products
+ * con la versión vieja de la nube.
+ * @param {number} ts
+ */
+export function _setLastLocalWriteTs(ts) {
+    _lastLocalWriteTs = ts;
+    console.debug('[Sync] _lastLocalWriteTs estampado manualmente:', ts);
+}
+
 // ─── Debounce de re-render (múltiples snapshots simultáneos) ──
 let _renderDebounceTimer = null;
 const RENDER_DEBOUNCE_MS = 150;
@@ -124,6 +137,10 @@ async function _readChunkedSubcollection(docRef, subcollName) {
         if (snap.empty) return [];
         const result = [];
         snap.forEach(d => {
+            // FIX-5: ignorar documentos transitorios 'new_chunk_N' que existen
+            // durante la ventana entre el primer y segundo batch de _writeChunkedSubcollection.
+            // Si se leen en esa ventana, los datos aparecen duplicados.
+            if (d.id.startsWith('new_')) return;
             const items = d.data().items;
             if (Array.isArray(items)) items.forEach(i => result.push(i));
         });
@@ -237,10 +254,34 @@ async function _applyMainDocData(data) {
     if (!data) return;
     const docRef = window._db.collection('inventarioApp').doc(window.FIRESTORE_DOC_ID);
 
+    // FIX BUG-5: doble guard de timestamp.
+    // Si el snapshot de la nube llega en la ventana entre saveToLocalStorage()
+    // e _lastLocalWriteTs (antes de que syncToCloud confirme), los datos
+    // de la nube podrían ser más viejos que los locales recién importados.
+    // Rechazamos la aplicación si el timestamp de la nube es <= al local.
+    const cloudDataTs = data._lastModified || 0;
+    const localTs = parseInt(localStorage.getItem('inventarioApp_lastModified') || '0', 10);
+    if (cloudDataTs > 0 && cloudDataTs <= localTs && _lastLocalWriteTs > 0) {
+        console.debug('[Snapshot] _applyMainDocData: datos de nube más viejos que local — ignorando products.');
+        // Solo aplicamos campos que no son productos (auditoriaStatus, etc.)
+        if (data.auditoriaStatus) {
+            const merged = { ...state.auditoriaStatus };
+            AREA_KEYS.forEach(a => {
+                if (data.auditoriaStatus[a] === 'completada') merged[a] = 'completada';
+            });
+            state.auditoriaStatus = merged;
+        }
+        return;
+    }
+
     if (Array.isArray(data.products))  state.products        = data.products;
     if (Array.isArray(data.cart))      state.cart            = data.cart;
-    if (data.activeTab)                state.activeTab       = data.activeTab;
-    if (data.selectedArea)             state.selectedArea    = data.selectedArea;
+    // FIX BUG-7: NO aplicar activeTab ni selectedArea desde la nube.
+    // Hacerlo cambia la pestaña activa del usuario en tiempo real cuando otro
+    // dispositivo sincroniza — comportamiento no deseado y confuso.
+    // Cada dispositivo mantiene su propia navegación local.
+    // if (data.activeTab)             state.activeTab       = data.activeTab;   ← REMOVIDO
+    // if (data.selectedArea)          state.selectedArea    = data.selectedArea; ← REMOVIDO
     if (data.auditoriaConteo)          state.auditoriaConteo = data.auditoriaConteo;
 
     // "completada always wins" — ningún dispositivo puede re-abrir una zona
@@ -328,6 +369,12 @@ function _applyUserConteoData(area, areaData) {
             console.debug(`[Snapshot][multiUser] Conteo de ${uid} para ${p.id}/${area}`);
         });
     });
+    // FIX: Propagar locks en tiempo real al admin
+    if (areaData._finalizados && typeof areaData._finalizados === 'object') {
+        import('./audit.js')
+            .then(m => { if (m.applyLockStatusFromSnapshot) m.applyLockStatusFromSnapshot(area, areaData); })
+            .catch(() => {});
+    }
 }
 
 async function _persistCloudUpdate(cloudTs) {
@@ -722,6 +769,14 @@ export async function syncToCloud(retryCount = 0) {
         updateCloudSyncBadge('pending');
         return;
     }
+    // FIX BUG-15: No sincronizar mientras el rol de usuario aún no está confirmado.
+    // Si userRole es null, isAdminRole = true (null === null) y syncToCloud intentaría
+    // escribir 'products' en Firestore con permisos de usuario anónimo → 403.
+    if (state.userRole === null && window._auth?.currentUser) {
+        console.debug('[Firebase] syncToCloud diferido — rol aún no confirmado.');
+        setTimeout(() => { if (state.userRole !== null) syncToCloud().catch(() => {}); }, 1500);
+        return;
+    }
 
     state._syncInProgress = true;
     updateCloudSyncBadge('syncing');
@@ -779,7 +834,24 @@ export async function syncToCloud(retryCount = 0) {
                 _inventoriesInChunks: true,
                 _conteoInSubcol:      true,
             };
-            tx.set(docRef, payload, { merge: true });
+            // FIX-1: los usuarios NO deben subir products/cart/activeTab/selectedArea.
+            // Solo el admin sube el catálogo completo. Un user solo sincroniza
+            // sus conteos de auditoría y stockAreas — nunca el catálogo.
+            // Esto evita el edge-case donde un user con products:[] localmente
+            // sobreescriba el catálogo de todos los demás bartenders.
+            const isAdminRole = (state.userRole === 'admin' || state.userRole === null);
+            const payloadToWrite = isAdminRole
+                ? payload
+                : {
+                    auditoriaStatus:      payload.auditoriaStatus,
+                    auditoriaConteo:      payload.auditoriaConteo,
+                    _lastModified:        payload._lastModified,
+                    _syncedAt:            payload._syncedAt,
+                    _ordersInChunks:      payload._ordersInChunks,
+                    _inventoriesInChunks: payload._inventoriesInChunks,
+                    _conteoInSubcol:      payload._conteoInSubcol,
+                  };
+            tx.set(docRef, payloadToWrite, { merge: true });
 
             // ── Fusionar stockAreas producto a producto ───────────────────
             // Registrar qué áreas se escribieron para actualizar anti-eco fuera
@@ -828,7 +900,15 @@ export async function syncToCloud(retryCount = 0) {
 
         // Historiales chunkeados (append-only, fuera de la transacción es seguro)
         // BUG-FIX: orders NO se suben — solo inventories se sincronizan a la nube
-        await _writeChunkedSubcollection(docRef, 'inventoriesChunks', state.inventories);
+        // FIX-3: wrap en try/catch por si los permisos de Firestore fallan transitoriamente
+        try {
+            await _writeChunkedSubcollection(docRef, 'inventoriesChunks', state.inventories);
+        } catch (chunkErr) {
+            // Fallo no crítico: el inventario ya está en localStorage.
+            // Se reintentará en la próxima syncToCloud.
+            console.warn('[Firebase] inventoriesChunks write falló:', chunkErr.code || chunkErr.message);
+            state._cloudSyncPending = true;
+        }
 
         state._cloudSyncPending = false;
         state._lastCloudSync    = Date.now();

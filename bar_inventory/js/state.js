@@ -1,70 +1,100 @@
 /**
- * js/state.js — v2.1
+ * js/state.js — v2.5
  * ══════════════════════════════════════════════════════════════
  * Estado global centralizado de la aplicación.
- * Todas las propiedades que CUALQUIER módulo necesita deben
- * estar declaradas aquí para evitar errores de undefined.
+ *
+ * NUEVO v2.5:
+ *   conteoFinalizadoPorUsuario — rastrea qué usuarios han
+ *   finalizado su conteo en cada área (mecanismo de bloqueo).
+ *   { [area]: { [userId]: { finalizado, userName, ts } } }
+ *   Permite al admin ver el estado por usuario y reabrir
+ *   conteos individuales sin afectar a otros usuarios.
  * ══════════════════════════════════════════════════════════════
  */
 
 export const state = {
 
-  // ─── Catálogo de productos (fuente: Admin) ──────────────────
+  // ─── Catálogo de productos ───────────────────────────────────
   products: [],
 
-  // ─── Carrito (pedidos en curso) ─────────────────────────────
+  // ─── Carrito ─────────────────────────────────────────────────
   cart: [],
 
-  // ─── Historial ──────────────────────────────────────────────
-  orders: [],          // Pedidos completados (solo local, NO se sincronizan)
-  inventories: [],     // Historiales de inventario (se sincronizan chunkeados)
+  // ─── Historial ───────────────────────────────────────────────
+  orders:      [],
+  inventories: [],
 
-  // ─── Navegación / UI ────────────────────────────────────────
-  activeTab: 'inicio',
-  selectedArea: 'almacen',
+  // ─── Navegación / UI ─────────────────────────────────────────
+  activeTab:     'inicio',
+  selectedArea:  'almacen',
   selectedGroup: 'Todos',
-  searchTerm: '',
+  searchTerm:    '',
 
-  // ─── Inventario operativo (conteo diario por área) ──────────
-  // Estructura: { [productId]: { almacen: number, barra1: number, barra2: number } }
+  // ─── Inventario operativo ────────────────────────────────────
+  // { [productId]: { almacen: number, barra1: number, barra2: number } }
   inventarioConteo: {},
 
-  // ─── Auditoría (conteo de verificación) ─────────────────────
-  // Estructura: { [productId]: { [area]: { enteras: n, abiertas: [...] } } }
+  // ─── Auditoría ───────────────────────────────────────────────
+  // { [productId]: { [area]: { enteras: n, abiertas: [oz, ...] } } }
   auditoriaConteo: {},
 
-  // Estado de cada zona: 'pendiente' | 'en_progreso' | 'completada'
   auditoriaStatus: {
     almacen: 'pendiente',
-    barra1: 'pendiente',
-    barra2: 'pendiente',
+    barra1:  'pendiente',
+    barra2:  'pendiente',
   },
 
-  // ─── Multi-usuario (conteo por persona) ─────────────────────
-  // Estructura: { [productId]: { [area]: { [userId]: { enteras, abiertas, ts } } } }
+  // Área activa en pantalla de conteo
+  auditoriaAreaActiva: null,
+
+  // Sub-vista: 'selection' | 'counting'
+  auditoriaView: 'selection',
+
+  // FIX BUG-7: flag de modo auditoría activo.
+  isAuditoriaMode: false,
+
+  // ─── Multi-usuario ────────────────────────────────────────────
+  // { [productId]: { [area]: { [userId]: { enteras, abiertas, ts } } } }
   auditoriaConteoPorUsuario: {},
 
-  // ─── Usuario actual de auditoría ────────────────────────────
-  // { userId: string, userName: string, role: 'admin'|'user' }
+  // { userId, userName, role }
   auditCurrentUser: null,
 
-  // ─── Rol del usuario autenticado ────────────────────────────
-  // 'admin' | 'user' | null (null = modo dev, se trata como admin)
+  // ─── NUEVO v2.5: Bloqueo por usuario ─────────────────────────
+  // Rastrea qué usuarios han finalizado su conteo en cada área.
+  // Admin puede ver y reabrir conteos individuales.
+  // { [area]: { [userId]: { finalizado: bool, userName: str, ts: num } } }
+  conteoFinalizadoPorUsuario: {
+    almacen: {},
+    barra1:  {},
+    barra2:  {},
+  },
+
+  // ─── Sesión Firebase ─────────────────────────────────────────
+  currentUser:  null,   // firebase.User | null
+  userProfile:  null,   // { uid, email, displayName, role, ... }
+
+  // 'admin' | 'user' | null
   userRole: null,
 
-  // ─── Sincronización ─────────────────────────────────────────
-  syncEnabled: true,           // Toggle del usuario (pausar/activar sync)
-  _cloudSyncPending: false,    // Hay cambios locales sin subir
-  _syncInProgress: false,      // Mutex: evita sync simultáneos
-  _lastCloudSync: 0,           // Timestamp del último sync exitoso
-  _lastDataHash: '',           // Hash para detectar cambios reales
+  // ─── Sincronización ──────────────────────────────────────────
+  syncEnabled:        true,
+  _cloudSyncPending:  false,
+  _syncInProgress:    false,
+  _lastCloudSync:     0,
+  _lastDataHash:      '',
 
-  // ─── Notificaciones ─────────────────────────────────────────
-  notificaciones: [],          // Array de notificaciones recibidas
+  // ─── Ajustes pendientes offline ──────────────────────────────
+  adjustmentsPending: [],
 
-  // ─── Ajustes (config del admin) ─────────────────────────────
-  ajustes: {},                 // Configuración sincronizada
+  // ─── Notificaciones ──────────────────────────────────────────
+  notifications:       [],
+  notificationsUnread: 0,
 
-  // ─── Reportes ───────────────────────────────────────────────
-  reportesPublicados: [],      // Reportes publicados por admin para descarga
+  // ─── Ajustes del admin ───────────────────────────────────────
+  ajustesPendientes: [],
+  ajustes: {},
+
+  // ─── Reportes ────────────────────────────────────────────────
+  reportesPublicados: [],
 };

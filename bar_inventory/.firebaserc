@@ -1,5 +1,7 @@
 {
   "projects": {
     "default": "bar-inventario-1109e"
-  }
+  },
+  "targets": {},
+  "etags": {}
 }
