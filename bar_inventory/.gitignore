@@ -2,6 +2,16 @@
 # .gitignore — BarInventory
 # ══════════════════════════════════════════════════════════════
 
+# Ignorar carpetas de pruebas y backups
+APP 1.0/
+CLAUDE/
+PROYECTO GESTOR DE INVENTARIO/
+PROYECTO UNIFICADO FINAL INVENTARY/
+actualizado/
+
+# Ignorar archivos HTML duplicados
+index.html
+
 # ─── CREDENCIALES (nunca al repositorio) ──────────────────────
 firebase-credentials.js
 
