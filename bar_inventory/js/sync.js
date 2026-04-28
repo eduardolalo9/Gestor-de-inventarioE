@@ -105,29 +105,53 @@ async function _writeChunkedSubcollection(docRef, subcollName, dataArray) {
     const colRef      = docRef.collection(subcollName);
     const totalChunks = Math.max(1, Math.ceil(dataArray.length / MAX_CHUNK_SIZE));
 
-    const writeBatch = window._db.batch();
-    for (let i = 0; i < totalChunks; i++) {
-        writeBatch.set(colRef.doc('new_chunk_' + i), {
-            items:       dataArray.slice(i * MAX_CHUNK_SIZE, (i + 1) * MAX_CHUNK_SIZE),
-            chunkIndex:  i,
-            totalChunks: totalChunks,
-            _updatedAt:  Date.now(),
-        });
-    }
-    await writeBatch.commit();
+    // FIX R-04: señalar al doc principal que una escritura está en progreso.
+    // _applyMainDocData respetará este flag y no leerá inventories en la
+    // ventana entre los dos batches (~200ms), evitando que otros dispositivos
+    // vean state.inventories = [] temporalmente.
+    const mainRef = window._db.collection('inventarioApp').doc(window.FIRESTORE_DOC_ID);
+    try { await mainRef.update({ _inventoriesWriting: true }); } catch (_) {}
 
-    const existingSnap = await colRef.get();
-    const cleanBatch   = window._db.batch();
-    existingSnap.forEach(d => {
-        if (d.id.startsWith('new_')) {
+    try {
+        const writeBatch = window._db.batch();
+        for (let i = 0; i < totalChunks; i++) {
+            writeBatch.set(colRef.doc('new_chunk_' + i), {
+                items:       dataArray.slice(i * MAX_CHUNK_SIZE, (i + 1) * MAX_CHUNK_SIZE),
+                chunkIndex:  i,
+                totalChunks: totalChunks,
+                _updatedAt:  Date.now(),
+            });
+        }
+        await writeBatch.commit();
+
+        const existingSnap = await colRef.get();
+        const cleanBatch   = window._db.batch();
+
+        // FIX R-08: hacer explícito el orden de operaciones en cleanBatch.
+        // Antes dependía implícitamente de que 'chunk_N' < 'new_chunk_N'
+        // alfabéticamente para que el delete fuera antes del set en el mismo
+        // batch. Ahora separamos los documentos en dos grupos explícitos:
+        // primero borramos los viejos (chunk_N), luego renombramos los nuevos.
+        const oldDocs = [];
+        const newDocs = [];
+        existingSnap.forEach(d => {
+            if (d.id.startsWith('new_')) newDocs.push(d);
+            else                         oldDocs.push(d);
+        });
+        // 1. Borrar docs viejos
+        oldDocs.forEach(d => cleanBatch.delete(d.ref));
+        // 2. Renombrar new_chunk_N → chunk_N y borrar el transitorio
+        newDocs.forEach(d => {
             cleanBatch.set(colRef.doc(d.id.replace('new_', '')), d.data());
             cleanBatch.delete(d.ref);
-        } else {
-            cleanBatch.delete(d.ref);
-        }
-    });
-    if (!existingSnap.empty) await cleanBatch.commit();
-    console.info(`[Firebase][Chunk] ${subcollName} → ${totalChunks} chunk(s) escritos.`);
+        });
+
+        if (!existingSnap.empty) await cleanBatch.commit();
+        console.info(`[Firebase][Chunk] ${subcollName} → ${totalChunks} chunk(s) escritos.`);
+    } finally {
+        // Siempre limpiar el flag, incluso si hubo error
+        try { await mainRef.update({ _inventoriesWriting: false }); } catch (_) {}
+    }
 }
 
 async function _readChunkedSubcollection(docRef, subcollName) {
@@ -277,25 +301,17 @@ async function _applyMainDocData(data) {
     if (Array.isArray(data.products))  state.products        = data.products;
     if (Array.isArray(data.cart))      state.cart            = data.cart;
     // FIX BUG-7: NO aplicar activeTab ni selectedArea desde la nube.
+    // Hacerlo cambia la pestaña activa del usuario en tiempo real cuando otro
+    // dispositivo sincroniza — comportamiento no deseado y confuso.
+    // Cada dispositivo mantiene su propia navegación local.
     // if (data.activeTab)             state.activeTab       = data.activeTab;   ← REMOVIDO
     // if (data.selectedArea)          state.selectedArea    = data.selectedArea; ← REMOVIDO
-
-    // ── Detección de reset de auditoría iniciado por el admin ──
-    // Si _resetCicloTs es más nuevo que el local, el admin inició un nuevo ciclo.
-    // Llamamos applyRemoteReset() en audit.js para limpiar el estado local
-    // de este dispositivo (conteos, locks, statuses) sin tocar Firestore.
-    const cloudResetTs = data._resetCicloTs || 0;
-    const localResetTs = parseInt(localStorage.getItem('inventarioApp_resetCicloTs') || '0', 10);
-    if (cloudResetTs > 0 && cloudResetTs > localResetTs) {
-        localStorage.setItem('inventarioApp_resetCicloTs', String(cloudResetTs));
-        console.info('[Snapshot] _resetCicloTs nuevo detectado — aplicando reset remoto de auditoría.');
-        import('./audit.js').then(m => {
-            if (typeof m.applyRemoteReset === 'function') m.applyRemoteReset();
-        }).catch(e => console.warn('[Snapshot] applyRemoteReset falló:', e));
-        // Salir temprano — applyRemoteReset ya maneja el render
-        return;
+    // FIX R-04: si _inventoriesWriting es true, otro dispositivo está en la
+    // ventana entre los dos batches de _writeChunkedSubcollection.
+    // No leer inventories ahora — el siguiente snapshot llegará con datos completos.
+    if (data._inventoriesWriting === true) {
+        console.debug("[Snapshot] _inventoriesWriting activo — skip inventories.");
     }
-
     if (data.auditoriaConteo)          state.auditoriaConteo = data.auditoriaConteo;
 
     // "completada always wins" — ningún dispositivo puede re-abrir una zona

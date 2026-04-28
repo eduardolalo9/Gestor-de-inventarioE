@@ -261,10 +261,10 @@ function createOrder() {
 
   const lines = [
     `📦 *PEDIDO BarInventory*`,
-    `🏪 Proveedor: ${order.supplier}`,
-    `📅 Fecha: ${order.date} ${order.time}`,
+    `Proveedor: ${order.supplier}`,
+    `Fecha: ${order.date} ${order.time}`,
     deliveryDate ? `Entrega: ${deliveryDate}` : null,
-    note ? `📝 Nota: ${note}` : null,
+    note ? `Nota: ${note}` : null,
     ``,
     ...order.products.map(p => `• ${p.name} (${p.unit}): *${_fmtQty(p.quantity)}*`),
     ``,
@@ -283,8 +283,8 @@ function shareOrderWhatsApp(orderId) {
   if (!order) return;
   const lines = [
     `📦 *PEDIDO BarInventory* (Reenvío)`,
-    `🏪 Proveedor: ${order.supplier}`,
-    `📅 Fecha original: ${order.date} ${order.time}`,
+    `Proveedor: ${order.supplier}`,
+    `Fecha original: ${order.date} ${order.time}`,
     ``,
     ...order.products.map(p => `• ${p.name} (${p.unit}): *${_fmtQty(p.quantity)}*`),
     ``,
@@ -516,6 +516,12 @@ async function resetAllInventario() {
   state.products.forEach(p => { p.stockByArea = { almacen: 0, barra1: 0, barra2: 0 }; });
   state.inventarioConteo = {};
   state.auditoriaConteo  = {};
+  // FIX R-02: limpiar también datos de auditoría multi-usuario.
+  // Antes, el panel del admin seguía mostrando a los bartenders como
+  // "Finalizados" con conteos del ciclo anterior después del reset.
+  state.auditoriaConteoPorUsuario  = {};
+  state.conteoFinalizadoPorUsuario = { almacen: {}, barra1: {}, barra2: {} };
+  state.auditoriaStatus            = { almacen: 'pendiente', barra1: 'pendiente', barra2: 'pendiente' };
   _commit();
   showNotification('✅ Inventario reseteado');
 }
